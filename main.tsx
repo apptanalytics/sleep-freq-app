@@ -103,6 +103,7 @@ export default function Component() {
   const [masterVolume, setMasterVolume] = useState(0.8);
   const [timerMinutes, setTimerMinutes] = useState<number | null>(null);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const [dimScreen, setDimScreen] = useState(false);
 
   // Audio nodes and context refs
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -551,6 +552,19 @@ export default function Component() {
 
   return (
     <div className="min-h-screen w-full bg-[#0E0D0B] text-[#E9E2D4] flex items-center justify-center p-5 sm:p-10">
+      {/* Dimmed screen: black, shows only the sleep timer; tap anywhere to exit */}
+      {dimScreen && (
+        <div
+          onClick={() => setDimScreen(false)}
+          role="button"
+          aria-label="Exit dimmed screen"
+          className="fixed inset-0 z-50 bg-black flex items-center justify-center cursor-pointer"
+        >
+          {timeRemaining !== null && (
+            <span className="font-mono text-2xl tabular-nums text-[#4A453D]">{formatTimer(timeRemaining)}</span>
+          )}
+        </div>
+      )}
       <main className="w-full max-w-xl">
         {/* Header */}
         <header className="flex items-baseline justify-between gap-4 pb-5 border-b border-[#2A2620]">
@@ -708,6 +722,15 @@ export default function Component() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              onClick={() => setDimScreen(true)}
+              className="text-xs text-[#8A8175] hover:text-[#E9E2D4] transition-colors py-2"
+            >
+              Dim screen
+            </button>
           </div>
 
           <button
