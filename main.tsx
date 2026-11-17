@@ -41,6 +41,24 @@ const PRESETS: WavePreset[] = [
   }
 ];
 
+// Loop point fix: the generated buffer is `length + fade` samples long. The last `fade`
+// samples are blended into the start, so playback wraps without a click.
+function makeSeamless(ctx: AudioContext, channels: Float32Array[], length: number, fade: number) {
+  const buffer = ctx.createBuffer(channels.length, length, ctx.sampleRate);
+  channels.forEach((raw, c) => {
+    const out = buffer.getChannelData(c);
+    for (let i = 0; i < length; i++) {
+      if (i < fade) {
+        const w = i / fade;
+        out[i] = raw[i] * w + raw[length + i] * (1 - w);
+      } else {
+        out[i] = raw[i];
+      }
+    }
+  });
+  return buffer;
+}
+
 const SERIF = "Fraunces, Georgia, serif";
 
 // Labelled slider with a numeric readout and optional scale hints
@@ -150,7 +168,15 @@ export default function Component() {
 
       const masterGain = ctx.createGain();
       masterGain.gain.setValueAtTime(masterVolume, ctx.currentTime);
-      masterGain.connect(analyser);
+      // Soft limiter on the master bus: keeps summed layers below full scale so they don't distort
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.1;
+      masterGain.connect(limiter);
+      limiter.connect(analyser);
       analyser.connect(ctx.destination);
       masterGainRef.current = masterGain;
     }
@@ -163,10 +189,10 @@ export default function Component() {
   // Build Pink Noise Buffer (soft soothing frequency decay)
   const createPinkNoiseBuffer = (ctx: AudioContext) => {
     const bufferSize = ctx.sampleRate * 5; // 5 seconds looped
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const output = buffer.getChannelData(0);
+    const fade = Math.floor(ctx.sampleRate * 0.5); // 0.5 s crossfade hides the loop point
+    const output = new Float32Array(bufferSize + fade);
     let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-    for (let i = 0; i < bufferSize; i++) {
+    for (let i = 0; i < output.length; i++) {
       const white = Math.random() * 2 - 1;
       b0 = 0.99886 * b0 + white * 0.0555179;
       b1 = 0.99332 * b1 + white * 0.0750759;
@@ -177,21 +203,27 @@ export default function Component() {
       output[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.04;
       b6 = white * 0.115926;
     }
-    return buffer;
+    return makeSeamless(ctx, [output], bufferSize, fade);
   };
 
   // Build Procedural Soft Rain Buffer (filtered noise with droplet impulses)
   const createRainBuffer = (ctx: AudioContext) => {
     const duration = 6; // 6 second loopable texture
     const sampleRate = ctx.sampleRate;
-    const buffer = ctx.createBuffer(2, sampleRate * duration, sampleRate);
-    const left = buffer.getChannelData(0);
-    const right = buffer.getChannelData(1);
+    const length = sampleRate * duration;
+    const fade = Math.floor(sampleRate * 0.5); // 0.5 s crossfade hides the loop point
+    const left = new Float32Array(length + fade);
+    const right = new Float32Array(length + fade);
 
     // Multi-pole brownian/pink noise bed for patter
     let lastL = 0;
     let lastR = 0;
-    for (let i = 0; i < buffer.length; i++) {
+    // Raindrop state: each drop is a smooth 10 ms pulse, not a hard step
+    const DROP_LEN = Math.floor(sampleRate * 0.01);
+    let dropPos = DROP_LEN;
+    let dropIntensity = 0;
+    let dropGainR = 0;
+    for (let i = 0; i < left.length; i++) {
       const whiteL = Math.random() * 2 - 1;
       const whiteR = Math.random() * 2 - 1;
 
@@ -202,17 +234,23 @@ export default function Component() {
       let sampleL = lastL * 3.5;
       let sampleR = lastR * 3.5;
 
-      // Random gentle raindrop impacts
-      if (Math.random() < 0.003) {
-        const dropIntensity = (Math.random() * 0.15 + 0.05);
-        sampleL += dropIntensity;
-        sampleR += dropIntensity * (Math.random() * 0.6 + 0.4);
+      // Random gentle raindrop impacts (Hann-shaped pulse, so no pop)
+      if (dropPos >= DROP_LEN && Math.random() < 0.003) {
+        dropIntensity = Math.random() * 0.15 + 0.05;
+        dropGainR = dropIntensity * (Math.random() * 0.6 + 0.4);
+        dropPos = 0;
+      }
+      if (dropPos < DROP_LEN) {
+        const env = 0.5 - 0.5 * Math.cos((2 * Math.PI * dropPos) / DROP_LEN);
+        sampleL += dropIntensity * env;
+        sampleR += dropGainR * env;
+        dropPos++;
       }
 
       left[i] = sampleL * 0.4;
       right[i] = sampleR * 0.4;
     }
-    return buffer;
+    return makeSeamless(ctx, [left, right], length, fade);
   };
 
   // Start all generators
