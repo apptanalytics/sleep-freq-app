@@ -59,142 +59,106 @@ function makeSeamless(ctx: AudioContext, channels: Float32Array[], length: numbe
   return buffer;
 }
 
-const MIDNIGHT = "#14172B";
-const DISPLAY = "Gloock, Georgia, serif";
-const SANS = "'Familjen Grotesk', system-ui, sans-serif";
-
-interface Layer {
-  id: string;
-  name: string;
-  volume: number; // 0 to 1
-  set: (value: number) => void;
-  fill: string;
-  ink: string;
-}
-
-const BAND_MIN = 48; // px a layer keeps at zero volume, so its seam stays reachable
-
-// The core sample: layers stack from the ground up. A layer's thickness is its volume;
-// dragging its top seam makes it thicker (louder) or thinner (quieter).
-function Strata({
-  layers,
-  beatHz,
-  binauralVolume,
-  isPlaying
-}: {
-  layers: Layer[];
-  beatHz: number;
-  binauralVolume: number;
-  isPlaying: boolean;
-}) {
-  const coreRef = useRef<HTMLDivElement | null>(null);
-  const lineRef = useRef<HTMLCanvasElement | null>(null);
-  const [height, setHeight] = useState(360);
-  const drag = useRef<{ id: string; startY: number; startVol: number } | null>(null);
+// The two carriers, one per ear. Their phase gap opens and closes at the beat rate.
+function Waves({ beatHz, isPlaying }: { beatHz: number; isPlaying: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const live = useRef({ beatHz, isPlaying });
+  live.current = { beatHz, isPlaying };
 
   useEffect(() => {
-    const el = coreRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setHeight(entry.contentRect.height));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Pixels of thickness that one full unit of volume adds to a band
-  const span = Math.max(40, (height - BAND_MIN * layers.length) / layers.length);
-
-  // The binaural tone: one thin line threading down through every layer, moving at the beat rate
-  useEffect(() => {
-    const canvas = lineRef.current;
+    const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
+    const resize = () => {
+      canvas.width = Math.round(canvas.clientWidth * dpr);
+      canvas.height = Math.round(canvas.clientHeight * dpr);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
 
-    let phase = 0;
+    let left = 0;
+    let right = 0.9;
     let raf = 0;
     const draw = () => {
+      const { beatHz: beat, isPlaying: playing } = live.current;
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-      if (isPlaying && !reduced) phase += beatHz * 0.03;
-      const amp = (isPlaying ? 4 + binauralVolume * 10 : 1) * dpr;
-      ctx.strokeStyle = isPlaying ? "rgba(216, 212, 196, 0.9)" : "rgba(216, 212, 196, 0.35)";
-      ctx.lineWidth = 1.5 * dpr;
+      if (playing && !reduced) {
+        left += 0.02;
+        right += 0.02 + beat * 0.008;
+      }
+      const mid = h / 2;
+      const amp = h * 0.36;
+      const k = (Math.PI * 2 * 4) / w;
+      const step = 3 * dpr;
+
+      // The gap between the ears: wide where the waves oppose, closed where they agree
+      ctx.strokeStyle = playing ? "rgba(255, 106, 61, 0.2)" : "rgba(255, 106, 61, 0.08)";
+      ctx.lineWidth = dpr;
       ctx.beginPath();
-      for (let y = 0; y <= h; y += 3) {
-        const x = w * 0.86 + Math.sin(y / (26 * dpr) - phase) * amp;
-        if (y === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      for (let x = 0; x <= w; x += step) {
+        ctx.moveTo(x, mid + Math.sin(k * x - left) * amp);
+        ctx.lineTo(x, mid + Math.sin(k * x - right) * amp);
       }
       ctx.stroke();
+
+      const trace = (phase: number, color: string) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        for (let x = 0; x <= w; x += dpr * 2) {
+          const y = mid + Math.sin(k * x - phase) * amp;
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      };
+      trace(left, "#9A3220");
+      trace(right, playing ? "#FF6A3D" : "#D24E33");
+
       raf = requestAnimationFrame(draw);
     };
     draw();
-    return () => cancelAnimationFrame(raf);
-  }, [isPlaying, beatHz, binauralVolume, height]);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, []);
 
-  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return <canvas ref={canvasRef} className="block w-full h-28" aria-hidden="true" />;
+}
 
+// Level control drawn as a row of exposure ticks. A transparent range input sits on top,
+// so touch, mouse and keyboard all work natively.
+function Meter({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const pct = Math.round(value * 100);
   return (
-    <div ref={coreRef} className={`core relative flex flex-col justify-end overflow-hidden ${isPlaying ? "is-playing" : ""}`}>
-      {layers.map((layer) => {
-        const pct = Math.round(layer.volume * 100);
-        return (
-          <div
-            key={layer.id}
-            className="relative shrink-0"
-            style={{ height: BAND_MIN + layer.volume * span, background: layer.fill, color: layer.ink }}
-          >
-            <div className={`tex tex-${layer.id}`} style={{ opacity: 0.2 + layer.volume * 0.8 }} />
-            <div className="relative flex items-baseline gap-3 px-4 pt-4">
-              <span className="text-xl leading-none" style={{ fontFamily: DISPLAY }}>{layer.name}</span>
-              <span className="text-sm tabular-nums opacity-80">{pct}%</span>
-            </div>
-            {/* Seam: the draggable top edge of this layer */}
-            <div
-              role="slider"
-              tabIndex={0}
-              aria-label={`${layer.name} volume`}
-              aria-orientation="vertical"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={pct}
-              aria-valuetext={`${pct}%`}
-              className="seam"
-              onPointerDown={(e) => {
-                e.currentTarget.setPointerCapture(e.pointerId);
-                drag.current = { id: layer.id, startY: e.clientY, startVol: layer.volume };
-              }}
-              onPointerMove={(e) => {
-                const d = drag.current;
-                if (!d || d.id !== layer.id) return;
-                layer.set(clamp(d.startVol + (d.startY - e.clientY) / span));
-              }}
-              onPointerUp={() => (drag.current = null)}
-              onPointerCancel={() => (drag.current = null)}
-              onKeyDown={(e) => {
-                const step = e.shiftKey ? 0.1 : 0.02;
-                if (e.key === "ArrowUp" || e.key === "ArrowRight") layer.set(clamp(layer.volume + step));
-                else if (e.key === "ArrowDown" || e.key === "ArrowLeft") layer.set(clamp(layer.volume - step));
-                else return;
-                e.preventDefault();
-              }}
-            >
-              <span className="seam-grip" />
-            </div>
-          </div>
-        );
-      })}
-      <canvas ref={lineRef} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true" />
+    <div>
+      <div className="flex items-baseline justify-between text-base">
+        <span className="text-[var(--hot)]">{label}</span>
+        <span className="tabular-nums text-[var(--ember)]">{pct}%</span>
+      </div>
+      <div className="meter" style={{ "--v": `${pct}%` } as React.CSSProperties}>
+        <input
+          type="range"
+          aria-label={label}
+          min={0}
+          max={1}
+          step={0.01}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+        />
+      </div>
     </div>
   );
 }
 
-// Labelled slider with a numeric readout and optional scale hints
+// Labelled slider with a numeric readout
 function Control({
   label,
   readout,
@@ -202,8 +166,7 @@ function Control({
   max,
   step,
   value,
-  onChange,
-  hints
+  onChange
 }: {
   label: string;
   readout: string;
@@ -212,13 +175,12 @@ function Control({
   step: number;
   value: number;
   onChange: (value: number) => void;
-  hints?: string[];
 }) {
   return (
     <div>
-      <div className="flex items-baseline justify-between">
-        <span className="text-base text-[#D8D4C4]">{label}</span>
-        <span className="text-base tabular-nums text-[#A0A2B8]">{readout}</span>
+      <div className="flex items-baseline justify-between text-base">
+        <span className="text-[var(--hot)]">{label}</span>
+        <span className="tabular-nums text-[var(--ember)]">{readout}</span>
       </div>
       <input
         type="range"
@@ -228,22 +190,18 @@ function Control({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="mt-3 w-full h-1 cursor-pointer accent-[#D8D4C4]"
+        className="scrub"
       />
-      {hints && (
-        <div className="mt-2 flex justify-between text-sm text-[#A0A2B8]">
-          {hints.map((h) => (
-            <span key={h}>{h}</span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
+const BEAT_MIN = 0.5;
+const BEAT_MAX = 15;
+const beatPercent = (hz: number) => ((hz - BEAT_MIN) / (BEAT_MAX - BEAT_MIN)) * 100;
+
 export default function Component() {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [selectedPreset, setSelectedPreset] = useState<WavePreset>(PRESETS[1]); // Default Theta
   const [customBeatHz, setCustomBeatHz] = useState<number>(PRESETS[1].beatHz);
   const [carrierHz, setCarrierHz] = useState<number>(PRESETS[1].carrierHz);
 
@@ -626,7 +584,6 @@ export default function Component() {
 
   // Select preset
   const handleSelectPreset = (preset: WavePreset) => {
-    setSelectedPreset(preset);
     setCustomBeatHz(preset.beatHz);
     setCarrierHz(preset.carrierHz);
   };
@@ -668,15 +625,15 @@ export default function Component() {
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // Layers listed top to bottom, as they stack in the core
-  const layers: Layer[] = [
-    { id: "rain", name: "Rain", volume: rainVolume, set: setRainVolume, fill: "#2E4A52", ink: "#D8D4C4" },
-    { id: "air", name: "Air", volume: pinkNoiseVolume, set: setPinkNoiseVolume, fill: "#4A3F34", ink: "#D8D4C4" },
-    { id: "drone", name: "Drone", volume: droneVolume, set: setDroneVolume, fill: "#8E9A63", ink: "#14172B" }
-  ];
+  // The state follows the beat, so dragging the scrubber renames it live
+  const activePreset = customBeatHz < 4 ? PRESETS[2] : customBeatHz < 8 ? PRESETS[1] : PRESETS[0];
+  const stateName = activePreset.name.replace(" Waves", "");
+
+  const clock =
+    timeRemaining !== null ? formatTimer(timeRemaining) : timerMinutes !== null ? `${timerMinutes}:00` : "Off";
 
   return (
-    <div className="min-h-screen w-full text-[#D8D4C4]" style={{ background: MIDNIGHT, fontFamily: SANS }}>
+    <div className="min-h-screen w-full text-[var(--hot)] safelight">
       {/* Dimmed screen: black, shows only the sleep timer; tap anywhere to exit */}
       {dimScreen && (
         <div
@@ -686,163 +643,148 @@ export default function Component() {
           className="fixed inset-0 z-50 bg-black flex items-center justify-center cursor-pointer"
         >
           {timeRemaining !== null && (
-            <span className="text-4xl tabular-nums text-[#3E4158]" style={{ fontFamily: DISPLAY }}>
-              {formatTimer(timeRemaining)}
-            </span>
+            <span className="clock text-6xl tabular-nums text-[#5A1E14]">{formatTimer(timeRemaining)}</span>
           )}
         </div>
       )}
 
-      <main className="mx-auto w-full max-w-5xl px-5 py-6 sm:px-10 sm:py-10 lg:grid lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:gap-x-20 lg:gap-y-8 lg:items-start">
-        {/* Current state */}
-        <section className="lg:col-start-2 lg:row-start-1">
-          <p className="flex items-baseline justify-between text-sm text-[#A0A2B8]">
-            <span>Sleep Soundscape</span>
-            <span>Best with headphones</span>
+      <main className="mx-auto w-full max-w-xl px-5 pt-6 sm:px-8 sm:pt-10">
+        <p className="flex items-baseline justify-between text-sm text-[var(--ember)]">
+          <span>Sleep Soundscape</span>
+          <span>Best with headphones</span>
+        </p>
+
+        {/* State */}
+        <section className="mt-8 overflow-hidden">
+          <h1 className={`hero-name ${isPlaying ? "is-playing" : ""}`}>{stateName}</h1>
+          <p className="mt-3 text-2xl tabular-nums">
+            {customBeatHz.toFixed(1)} Hz
+            <span className="ml-3 text-base text-[var(--ember)]">between your ears</span>
           </p>
-          <h1 className="mt-6 text-6xl sm:text-7xl leading-none" style={{ fontFamily: DISPLAY }}>
-            {selectedPreset.name.replace(" Waves", "")}
-          </h1>
-          <p className="mt-4 text-base text-[#A0A2B8] tabular-nums">
-            {customBeatHz.toFixed(1)} Hz beat on a {Math.round(carrierHz)} Hz tone
-          </p>
-          <p className="mt-1 max-w-[34ch] text-base leading-snug text-[#D8D4C4]">{selectedPreset.description}</p>
+          <p className="mt-2 max-w-[36ch] text-base leading-snug text-[var(--ember)]">{activePreset.description}</p>
         </section>
 
-        {/* The core: drag a seam to set that layer's volume */}
-        <section className="mt-8 lg:mt-0 lg:col-start-1 lg:row-start-1 lg:row-span-2" aria-label="Sound mix">
-          <Strata layers={layers} beatHz={customBeatHz} binauralVolume={binauralVolume} isPlaying={isPlaying} />
-          <p className="mt-3 text-sm text-[#A0A2B8]">Drag a seam up or down to change a layer's volume.</p>
+        {/* Waves */}
+        <section className="mt-8" aria-label="Left and right ear tones">
+          <Waves beatHz={customBeatHz} isPlaying={isPlaying} />
+          <p className="mt-2 flex justify-between text-sm tabular-nums text-[var(--ember)]">
+            <span>Left ear {carrierHz.toFixed(0)} Hz</span>
+            <span>Right ear {(carrierHz + customBeatHz).toFixed(0)} Hz</span>
+          </p>
         </section>
 
-        {/* Controls */}
-        <section className="mt-8 lg:mt-0 lg:col-start-2 lg:row-start-2 space-y-7">
-          <div role="group" aria-label="Brainwave state" className="grid grid-cols-3 gap-2">
-            {PRESETS.map((p) => {
-              const active = selectedPreset.id === p.id;
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => handleSelectPreset(p)}
-                  aria-pressed={active}
-                  className="text-left rounded-sm px-3 py-3 transition-colors"
-                  style={{
-                    background: active ? "#232850" : "transparent",
-                    color: active ? "#D8D4C4" : "#A0A2B8",
-                    boxShadow: active ? "inset 0 0 0 1px #3A4080" : "inset 0 0 0 1px #262A4A"
-                  }}
-                >
-                  <span className="block text-xl leading-tight" style={{ fontFamily: DISPLAY }}>
-                    {p.name.replace(" Waves", "")}
-                  </span>
-                  <span className="block mt-1 text-sm tabular-nums whitespace-nowrap">{p.rangeText}</span>
-                </button>
-              );
-            })}
+        {/* Beat scrubber with the three states marked on it */}
+        <section className="mt-6" aria-label="Brainwave state">
+          <input
+            type="range"
+            aria-label="Beat frequency"
+            aria-valuetext={`${customBeatHz.toFixed(1)} hertz, ${stateName}`}
+            min={BEAT_MIN}
+            max={BEAT_MAX}
+            step={0.1}
+            value={customBeatHz}
+            onChange={(e) => setCustomBeatHz(parseFloat(e.target.value))}
+            className="scrub"
+          />
+          <div className="relative h-11">
+            {[PRESETS[2], PRESETS[1], PRESETS[0]].map((p) => (
+              <button
+                key={p.id}
+                onClick={() => handleSelectPreset(p)}
+                className={`state-mark ${activePreset.id === p.id ? "is-active" : ""}`}
+                style={{ left: `${beatPercent(p.beatHz)}%` }}
+              >
+                {p.name.replace(" Waves", "")}
+              </button>
+            ))}
           </div>
+        </section>
 
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base">
-            <span className="mr-1">Stop after</span>
-            {[null, 15, 30, 60].map((mins) => {
-              const active = timerMinutes === mins;
-              return (
+        {/* Mix */}
+        <section className="mt-8 space-y-5" aria-label="Mix">
+          <Meter label="Rain" value={rainVolume} onChange={setRainVolume} />
+          <Meter label="Air" value={pinkNoiseVolume} onChange={setPinkNoiseVolume} />
+          <Meter label="Drone" value={droneVolume} onChange={setDroneVolume} />
+          <Meter label="Pure tone" value={binauralVolume} onChange={setBinauralVolume} />
+        </section>
+
+        {/* Timer length */}
+        <section className="mt-8 flex flex-wrap items-center gap-x-1 text-base">
+          <span className="mr-1 text-[var(--ember)]">Stop after</span>
+          {[null, 15, 30, 60].map((mins) => (
+            <button
+              key={mins === null ? "off" : mins}
+              onClick={() => setTimerMinutes(mins)}
+              aria-pressed={timerMinutes === mins}
+              className={`opt ${timerMinutes === mins ? "is-active" : ""}`}
+            >
+              {mins === null ? "Never" : `${mins} min`}
+            </button>
+          ))}
+        </section>
+
+        <details className="mt-4">
+          <summary className="cursor-pointer min-h-11 flex items-center text-base text-[var(--ember)] hover:text-[var(--hot)]">
+            Fine-tune
+          </summary>
+          <div className="mt-3 space-y-6">
+            <Control
+              label="Carrier pitch"
+              readout={`${Math.round(carrierHz)} Hz`}
+              min={100}
+              max={432}
+              step={1}
+              value={carrierHz}
+              onChange={setCarrierHz}
+            />
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-base">Master volume</span>
                 <button
-                  key={mins === null ? "off" : mins}
-                  onClick={() => setTimerMinutes(mins)}
-                  aria-pressed={active}
-                  className="min-h-11 px-3 tabular-nums"
-                  style={{
-                    color: active ? MIDNIGHT : "#A0A2B8",
-                    background: active ? "#D8D4C4" : "transparent",
-                    borderRadius: 2
-                  }}
+                  onClick={() => setMasterVolume((prev) => (prev > 0 ? 0 : 0.8))}
+                  className="min-w-11 min-h-11 flex items-center justify-center text-[var(--ember)] hover:text-[var(--hot)]"
+                  aria-label={masterVolume === 0 ? "Unmute" : "Mute"}
                 >
-                  {mins === null ? "Never" : `${mins} min`}
+                  {masterVolume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                 </button>
-              );
-            })}
-            {timeRemaining !== null && (
-              <span className="w-full text-[#A0A2B8] tabular-nums">Stops in {formatTimer(timeRemaining)}</span>
-            )}
+              </div>
+              <div className="meter" style={{ "--v": `${Math.round(masterVolume * 100)}%` } as React.CSSProperties}>
+                <input
+                  type="range"
+                  aria-label="Master volume"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={masterVolume}
+                  onChange={(e) => setMasterVolume(parseFloat(e.target.value))}
+                />
+              </div>
+            </div>
           </div>
+        </details>
 
-          <button
-            onClick={togglePlay}
-            className="w-full py-4 text-2xl transition-opacity hover:opacity-90"
-            style={{ background: "#D8D4C4", color: MIDNIGHT, fontFamily: DISPLAY, borderRadius: 2 }}
+        <button
+          onClick={() => setDimScreen(true)}
+          className="mt-2 min-h-11 text-base text-[var(--ember)] hover:text-[var(--hot)] underline underline-offset-4"
+        >
+          Dim screen
+        </button>
+
+        {/* Thumb zone: the clock and the main action stay within reach */}
+        <div className="dock sticky bottom-0 mt-6 -mx-5 sm:-mx-8 px-5 sm:px-8 pt-4 flex items-center gap-5">
+          <span
+            className={`clock text-5xl tabular-nums ${timeRemaining !== null ? "text-[var(--hot)]" : "text-[var(--dim)]"}`}
+            aria-label={timeRemaining !== null ? `Stops in ${clock}` : "Timer"}
           >
-            <span className="inline-flex items-center gap-3">
+            {clock}
+          </span>
+          <button onClick={togglePlay} className="begin flex-1">
+            <span className="inline-flex items-center justify-center gap-3">
               {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
               {isPlaying ? "Pause" : "Begin"}
             </span>
           </button>
-
-          <details>
-            <summary className="cursor-pointer min-h-11 flex items-center text-base text-[#A0A2B8] hover:text-[#D8D4C4]">
-              Fine-tune
-            </summary>
-            <div className="mt-4 space-y-6">
-              <Control
-                label="Beat"
-                readout={`${customBeatHz.toFixed(1)} Hz`}
-                min={0.5}
-                max={15}
-                step={0.1}
-                value={customBeatHz}
-                onChange={setCustomBeatHz}
-                hints={["0.5 delta", "6 theta", "12 alpha"]}
-              />
-              <Control
-                label="Carrier pitch"
-                readout={`${Math.round(carrierHz)} Hz`}
-                min={100}
-                max={432}
-                step={1}
-                value={carrierHz}
-                onChange={setCarrierHz}
-                hints={["100", "216", "432"]}
-              />
-              <Control
-                label="Pure tone"
-                readout={`${Math.round(binauralVolume * 100)}%`}
-                min={0}
-                max={1}
-                step={0.01}
-                value={binauralVolume}
-                onChange={setBinauralVolume}
-              />
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-base">Master volume</span>
-                  <button
-                    onClick={() => setMasterVolume((prev) => (prev > 0 ? 0 : 0.8))}
-                    className="min-w-11 min-h-11 flex items-center justify-center text-[#A0A2B8] hover:text-[#D8D4C4]"
-                    aria-label={masterVolume === 0 ? "Unmute" : "Mute"}
-                  >
-                    {masterVolume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                  </button>
-                </div>
-                <input
-                  type="range"
-                  aria-label="Master volume"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={masterVolume}
-                  onChange={(e) => setMasterVolume(parseFloat(e.target.value))}
-                  className="w-full h-1 cursor-pointer accent-[#D8D4C4]"
-                />
-              </div>
-            </div>
-          </details>
-
-          <button
-            onClick={() => setDimScreen(true)}
-            className="min-h-11 text-base text-[#A0A2B8] hover:text-[#D8D4C4] underline underline-offset-4"
-          >
-            Dim screen
-          </button>
-        </section>
+        </div>
       </main>
     </div>
   );

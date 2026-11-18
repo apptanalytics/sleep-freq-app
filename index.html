@@ -3,50 +3,81 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#14172B" />
+    <meta name="theme-color" content="#070302" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="apple-touch-icon" href="./icons/icon-192.png" />
     <meta name="description" content="Binaural beats and ambient soundscapes for sleep, in your browser." />
     <title>Sleep Soundscape</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500&family=Gloock&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Anybody:wdth,wght@50..150,100..900&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      html, body { background: #14172B; margin: 0; }
+      /* Safelight: red wavelengths are the least disruptive to sleep, so the whole interface is one hue. */
+      :root {
+        --black: #070302;
+        --coal: #170807;
+        --dim: #6B2318;
+        --ember: #D24E33;
+        --hot: #FF6A3D;
+      }
+      html, body { background: var(--black); margin: 0; }
+      body { font-family: Anybody, system-ui, sans-serif; font-variation-settings: "wdth" 100; letter-spacing: 0.02em; }
+      button { font: inherit; letter-spacing: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+      .safelight { background: radial-gradient(120% 55% at 50% -12%, rgba(194, 59, 34, 0.16), transparent 62%), var(--black); }
+      :focus-visible { outline: 2px solid var(--hot); outline-offset: 3px; }
 
-      .core { height: clamp(300px, 44vh, 460px); background: #14172B; box-shadow: inset 0 0 0 1px #262A4A; }
-      @media (min-width: 1024px) { .core { height: clamp(380px, 68vh, 640px); } }
-      .tex { position: absolute; inset: 0; pointer-events: none; }
-      .tex-rain {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='160'%3E%3Cg stroke='%23D8D4C4' stroke-width='1' stroke-linecap='round' opacity='.35'%3E%3Cpath d='M10 12l-2 22M38 70l-2 18M66 30l-2 26M94 104l-2 20M22 118l-2 24M108 20l-2 16M52 132l-2 18M80 62l-2 14'/%3E%3C/g%3E%3C/svg%3E");
-        background-size: 120px 160px;
+      /* The state name; its width breathes while playing */
+      .hero-name {
+        margin: 0;
+        font-size: clamp(4.5rem, 21vw, 8.5rem);
+        line-height: 0.95;
+        font-weight: 700;
+        font-variation-settings: "wdth" 100;
+        white-space: nowrap;
       }
-      .tex-air {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .85 0 0 0 0 .83 0 0 0 0 .77 1.4 0 0 0 -.45'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      @keyframes breathe {
+        from { font-variation-settings: "wdth" 70; }
+        to { font-variation-settings: "wdth" 130; }
       }
-      .tex-drone {
-        background-image:
-          repeating-linear-gradient(0deg, rgba(20,23,43,.22) 0 1px, transparent 1px 7px),
-          repeating-linear-gradient(0deg, rgba(20,23,43,.12) 0 2px, transparent 2px 19px);
+      .hero-name.is-playing { animation: breathe 10s ease-in-out infinite alternate; }
+      @media (prefers-reduced-motion: reduce) { .hero-name.is-playing { animation: none; } }
+
+      .clock { font-weight: 600; font-variation-settings: "wdth" 70; line-height: 1; }
+
+      /* Scrubber: a hairline track with a bar for a thumb */
+      input.scrub { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 44px; margin: 0; background: transparent; cursor: pointer; }
+      input.scrub::-webkit-slider-runnable-track { height: 2px; background: var(--dim); }
+      input.scrub::-moz-range-track { height: 2px; background: var(--dim); }
+      input.scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 8px; height: 30px; margin-top: -14px; border: 0; border-radius: 1px; background: var(--hot); }
+      input.scrub::-moz-range-thumb { width: 8px; height: 30px; border: 0; border-radius: 1px; background: var(--hot); }
+
+      .state-mark { position: absolute; top: 0; transform: translateX(-50%); min-height: 44px; min-width: 44px; font-size: 1rem; color: var(--ember); }
+      .state-mark::before { content: ""; position: absolute; left: 50%; top: 0; width: 1px; height: 8px; background: var(--dim); }
+      .state-mark.is-active { color: var(--hot); }
+      .state-mark.is-active::before { background: var(--hot); }
+
+      /* Exposure meter: ticks fill left to right */
+      .meter { position: relative; height: 30px; margin-top: 6px; }
+      .meter::before {
+        content: ""; position: absolute; inset: 0;
+        background: linear-gradient(90deg, var(--hot) var(--v), #3A130E var(--v));
+        -webkit-mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 7px);
+        mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 7px);
       }
-      @keyframes rain-fall { to { background-position-y: 160px; } }
-      .is-playing .tex-rain { animation: rain-fall 7s linear infinite; }
-      @media (prefers-reduced-motion: reduce) { .is-playing .tex-rain { animation: none; } }
-      .seam { position: absolute; left: 0; right: 0; top: -16px; height: 32px; z-index: 2; cursor: ns-resize; touch-action: none; display: flex; align-items: center; }
-      .seam::before { content: ""; position: absolute; left: 0; right: 0; top: 15px; height: 2px; background: #D8D4C4; }
-      .seam-grip { position: relative; margin-left: 16px; width: 36px; height: 6px; border-radius: 3px; background: #D8D4C4; box-shadow: 0 0 0 3px #14172B; }
-      .seam:focus-visible { outline: none; }
-      .seam:focus-visible .seam-grip { box-shadow: 0 0 0 3px #14172B, 0 0 0 5px #8E9A63; }
-      :focus-visible { outline: 2px solid #8E9A63; outline-offset: 2px; }
+      .meter input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; touch-action: pan-y; }
+      .meter:focus-within { outline: 2px solid var(--hot); outline-offset: 3px; }
+
+      .opt { min-height: 44px; padding: 0 0.5rem; color: var(--ember); border-bottom: 2px solid transparent; }
+      .opt.is-active { color: var(--hot); border-bottom-color: var(--hot); }
+
       summary { list-style: none; } summary::-webkit-details-marker { display: none; }
-      summary::after { content: "+"; margin-left: .6rem; } details[open] summary::after { content: "−"; }
-      /* Larger slider thumbs on touch screens (Android) so they are easy to drag */
-      @media (pointer: coarse) {
-        input[type="range"] { height: 28px; }
-        input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
-        input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border: none; }
-      }
+      summary::after { content: "+"; margin-left: 0.6rem; } details[open] summary::after { content: "−"; }
+
+      .dock { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); background: linear-gradient(to bottom, transparent, var(--black) 28%); }
+      .begin { min-height: 56px; background: var(--hot); color: var(--black); font-size: 1.5rem; font-weight: 700; border-radius: 2px; }
+      .begin:hover { background: #FF7F59; }
     </style>
   </head>
   <body>
