@@ -59,7 +59,140 @@ function makeSeamless(ctx: AudioContext, channels: Float32Array[], length: numbe
   return buffer;
 }
 
-const SERIF = "Fraunces, Georgia, serif";
+const MIDNIGHT = "#14172B";
+const DISPLAY = "Gloock, Georgia, serif";
+const SANS = "'Familjen Grotesk', system-ui, sans-serif";
+
+interface Layer {
+  id: string;
+  name: string;
+  volume: number; // 0 to 1
+  set: (value: number) => void;
+  fill: string;
+  ink: string;
+}
+
+const BAND_MIN = 48; // px a layer keeps at zero volume, so its seam stays reachable
+
+// The core sample: layers stack from the ground up. A layer's thickness is its volume;
+// dragging its top seam makes it thicker (louder) or thinner (quieter).
+function Strata({
+  layers,
+  beatHz,
+  binauralVolume,
+  isPlaying
+}: {
+  layers: Layer[];
+  beatHz: number;
+  binauralVolume: number;
+  isPlaying: boolean;
+}) {
+  const coreRef = useRef<HTMLDivElement | null>(null);
+  const lineRef = useRef<HTMLCanvasElement | null>(null);
+  const [height, setHeight] = useState(360);
+  const drag = useRef<{ id: string; startY: number; startVol: number } | null>(null);
+
+  useEffect(() => {
+    const el = coreRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setHeight(entry.contentRect.height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Pixels of thickness that one full unit of volume adds to a band
+  const span = Math.max(40, (height - BAND_MIN * layers.length) / layers.length);
+
+  // The binaural tone: one thin line threading down through every layer, moving at the beat rate
+  useEffect(() => {
+    const canvas = lineRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+
+    let phase = 0;
+    let raf = 0;
+    const draw = () => {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      if (isPlaying && !reduced) phase += beatHz * 0.03;
+      const amp = (isPlaying ? 4 + binauralVolume * 10 : 1) * dpr;
+      ctx.strokeStyle = isPlaying ? "rgba(216, 212, 196, 0.9)" : "rgba(216, 212, 196, 0.35)";
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      for (let y = 0; y <= h; y += 3) {
+        const x = w * 0.86 + Math.sin(y / (26 * dpr) - phase) * amp;
+        if (y === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, beatHz, binauralVolume, height]);
+
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+
+  return (
+    <div ref={coreRef} className={`core relative flex flex-col justify-end overflow-hidden ${isPlaying ? "is-playing" : ""}`}>
+      {layers.map((layer) => {
+        const pct = Math.round(layer.volume * 100);
+        return (
+          <div
+            key={layer.id}
+            className="relative shrink-0"
+            style={{ height: BAND_MIN + layer.volume * span, background: layer.fill, color: layer.ink }}
+          >
+            <div className={`tex tex-${layer.id}`} style={{ opacity: 0.2 + layer.volume * 0.8 }} />
+            <div className="relative flex items-baseline gap-3 px-4 pt-4">
+              <span className="text-xl leading-none" style={{ fontFamily: DISPLAY }}>{layer.name}</span>
+              <span className="text-sm tabular-nums opacity-80">{pct}%</span>
+            </div>
+            {/* Seam: the draggable top edge of this layer */}
+            <div
+              role="slider"
+              tabIndex={0}
+              aria-label={`${layer.name} volume`}
+              aria-orientation="vertical"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              aria-valuetext={`${pct}%`}
+              className="seam"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                drag.current = { id: layer.id, startY: e.clientY, startVol: layer.volume };
+              }}
+              onPointerMove={(e) => {
+                const d = drag.current;
+                if (!d || d.id !== layer.id) return;
+                layer.set(clamp(d.startVol + (d.startY - e.clientY) / span));
+              }}
+              onPointerUp={() => (drag.current = null)}
+              onPointerCancel={() => (drag.current = null)}
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 0.1 : 0.02;
+                if (e.key === "ArrowUp" || e.key === "ArrowRight") layer.set(clamp(layer.volume + step));
+                else if (e.key === "ArrowDown" || e.key === "ArrowLeft") layer.set(clamp(layer.volume - step));
+                else return;
+                e.preventDefault();
+              }}
+            >
+              <span className="seam-grip" />
+            </div>
+          </div>
+        );
+      })}
+      <canvas ref={lineRef} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true" />
+    </div>
+  );
+}
 
 // Labelled slider with a numeric readout and optional scale hints
 function Control({
@@ -84,20 +217,21 @@ function Control({
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <label className="text-sm text-[#E9E2D4]">{label}</label>
-        <span className="font-mono text-xs tabular-nums text-[#8A8175]">{readout}</span>
+        <span className="text-base text-[#D8D4C4]">{label}</span>
+        <span className="text-base tabular-nums text-[#A0A2B8]">{readout}</span>
       </div>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="mt-3 w-full h-1 cursor-pointer accent-[#D9A441]"
+        className="mt-3 w-full h-1 cursor-pointer accent-[#D8D4C4]"
       />
       {hints && (
-        <div className="mt-2 flex justify-between font-mono text-[10px] text-[#5E574E]">
+        <div className="mt-2 flex justify-between text-sm text-[#A0A2B8]">
           {hints.map((h) => (
             <span key={h}>{h}</span>
           ))}
@@ -146,10 +280,7 @@ export default function Component() {
   const rainSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const rainGainRef = useRef<GainNode | null>(null);
 
-  // Visualizer canvas ref
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const animFrameIdRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
 
   // Keep latest volume / settings in refs for lookups
@@ -531,65 +662,21 @@ export default function Component() {
     };
   }, [timerMinutes, isPlaying]);
 
-  // Canvas visualizer: one thin line that moves at the beat rate, nearly flat when stopped
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let phase = 0;
-    const render = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-      ctx.clearRect(0, 0, width, height);
-
-      // Hairline baseline
-      ctx.strokeStyle = "rgba(233, 226, 212, 0.08)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, height / 2);
-      ctx.lineTo(width, height / 2);
-      ctx.stroke();
-
-      phase += isPlaying ? customBeatHz * 0.03 : 0.004;
-      const amplitude = isPlaying ? height * 0.32 : height * 0.04;
-
-      ctx.strokeStyle = isPlaying ? "rgba(217, 164, 65, 0.9)" : "rgba(233, 226, 212, 0.35)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      for (let x = 0; x <= width; x += 2) {
-        const normX = x / width;
-        // Envelope pinned to both ends so the line settles at the edges
-        const y = height / 2 + Math.sin(normX * Math.PI * 4 + phase) * amplitude * Math.sin(normX * Math.PI);
-        if (x === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-      ctx.stroke();
-
-      animFrameIdRef.current = requestAnimationFrame(render);
-    };
-
-    render();
-
-    return () => {
-      if (animFrameIdRef.current) {
-        cancelAnimationFrame(animFrameIdRef.current);
-      }
-    };
-  }, [isPlaying, customBeatHz]);
-
   const formatTimer = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
+  // Layers listed top to bottom, as they stack in the core
+  const layers: Layer[] = [
+    { id: "rain", name: "Rain", volume: rainVolume, set: setRainVolume, fill: "#2E4A52", ink: "#D8D4C4" },
+    { id: "air", name: "Air", volume: pinkNoiseVolume, set: setPinkNoiseVolume, fill: "#4A3F34", ink: "#D8D4C4" },
+    { id: "drone", name: "Drone", volume: droneVolume, set: setDroneVolume, fill: "#8E9A63", ink: "#14172B" }
+  ];
+
   return (
-    <div className="min-h-screen w-full bg-[#0E0D0B] text-[#E9E2D4] flex items-center justify-center p-5 sm:p-10">
+    <div className="min-h-screen w-full text-[#D8D4C4]" style={{ background: MIDNIGHT, fontFamily: SANS }}>
       {/* Dimmed screen: black, shows only the sleep timer; tap anywhere to exit */}
       {dimScreen && (
         <div
@@ -599,192 +686,161 @@ export default function Component() {
           className="fixed inset-0 z-50 bg-black flex items-center justify-center cursor-pointer"
         >
           {timeRemaining !== null && (
-            <span className="font-mono text-2xl tabular-nums text-[#4A453D]">{formatTimer(timeRemaining)}</span>
+            <span className="text-4xl tabular-nums text-[#3E4158]" style={{ fontFamily: DISPLAY }}>
+              {formatTimer(timeRemaining)}
+            </span>
           )}
         </div>
       )}
-      <main className="w-full max-w-xl">
-        {/* Header */}
-        <header className="flex items-baseline justify-between gap-4 pb-5 border-b border-[#2A2620]">
-          <h1 className="text-2xl text-[#F3ECDD]" style={{ fontFamily: SERIF }}>
-            Sleep Soundscape
-          </h1>
-          <p className="hidden sm:block text-xs text-[#8A8175]">Best with headphones</p>
-        </header>
 
-        {/* Signal */}
-        <section className="py-6 border-b border-[#2A2620]">
-          <canvas ref={canvasRef} width={640} height={120} className="w-full h-24" />
-          <div className="mt-3 flex items-center justify-between font-mono text-xs tabular-nums text-[#8A8175]">
-            <span>
-              Beat <span className="text-[#E9E2D4]">{customBeatHz.toFixed(1)} Hz</span>
-              {" · "}
-              Carrier <span className="text-[#E9E2D4]">{Math.round(carrierHz)} Hz</span>
-            </span>
-            {timeRemaining !== null && <span>Stops in {formatTimer(timeRemaining)}</span>}
-          </div>
+      <main className="mx-auto w-full max-w-5xl px-5 py-6 sm:px-10 sm:py-10 lg:grid lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:gap-x-20 lg:gap-y-8 lg:items-start">
+        {/* Current state */}
+        <section className="lg:col-start-2 lg:row-start-1">
+          <p className="flex items-baseline justify-between text-sm text-[#A0A2B8]">
+            <span>Sleep Soundscape</span>
+            <span>Best with headphones</span>
+          </p>
+          <h1 className="mt-6 text-6xl sm:text-7xl leading-none" style={{ fontFamily: DISPLAY }}>
+            {selectedPreset.name.replace(" Waves", "")}
+          </h1>
+          <p className="mt-4 text-base text-[#A0A2B8] tabular-nums">
+            {customBeatHz.toFixed(1)} Hz beat on a {Math.round(carrierHz)} Hz tone
+          </p>
+          <p className="mt-1 max-w-[34ch] text-base leading-snug text-[#D8D4C4]">{selectedPreset.description}</p>
         </section>
 
-        {/* Brainwave state */}
-        <section className="py-6 border-b border-[#2A2620]">
-          <h2 className="mb-3 text-sm text-[#8A8175] italic" style={{ fontFamily: SERIF }}>
-            Brainwave state
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-[#2A2620] border border-[#2A2620]">
+        {/* The core: drag a seam to set that layer's volume */}
+        <section className="mt-8 lg:mt-0 lg:col-start-1 lg:row-start-1 lg:row-span-2" aria-label="Sound mix">
+          <Strata layers={layers} beatHz={customBeatHz} binauralVolume={binauralVolume} isPlaying={isPlaying} />
+          <p className="mt-3 text-sm text-[#A0A2B8]">Drag a seam up or down to change a layer's volume.</p>
+        </section>
+
+        {/* Controls */}
+        <section className="mt-8 lg:mt-0 lg:col-start-2 lg:row-start-2 space-y-7">
+          <div role="group" aria-label="Brainwave state" className="grid grid-cols-3 gap-2">
             {PRESETS.map((p) => {
               const active = selectedPreset.id === p.id;
               return (
                 <button
                   key={p.id}
                   onClick={() => handleSelectPreset(p)}
-                  className={`text-left p-4 bg-[#0E0D0B] transition-colors ${
-                    active
-                      ? "text-[#F3ECDD] shadow-[inset_0_2px_0_#D9A441]"
-                      : "text-[#8A8175] hover:text-[#E9E2D4]"
-                  }`}
+                  aria-pressed={active}
+                  className="text-left rounded-sm px-3 py-3 transition-colors"
+                  style={{
+                    background: active ? "#232850" : "transparent",
+                    color: active ? "#D8D4C4" : "#A0A2B8",
+                    boxShadow: active ? "inset 0 0 0 1px #3A4080" : "inset 0 0 0 1px #262A4A"
+                  }}
                 >
-                  <span className="block text-base whitespace-nowrap" style={{ fontFamily: SERIF }}>{p.name}</span>
-                  <span className="block mt-0.5 font-mono text-[11px] tabular-nums whitespace-nowrap">{p.rangeText}</span>
-                  <p className="mt-2 text-xs leading-relaxed">{p.description}</p>
+                  <span className="block text-xl leading-tight" style={{ fontFamily: DISPLAY }}>
+                    {p.name.replace(" Waves", "")}
+                  </span>
+                  <span className="block mt-1 text-sm tabular-nums whitespace-nowrap">{p.rangeText}</span>
                 </button>
               );
             })}
           </div>
-        </section>
 
-        {/* Tuning */}
-        <section className="py-6 border-b border-[#2A2620] space-y-6">
-          <h2 className="text-sm text-[#8A8175] italic" style={{ fontFamily: SERIF }}>
-            Tuning
-          </h2>
-          <Control
-            label="Binaural beat"
-            readout={`${customBeatHz.toFixed(1)} Hz`}
-            min={0.5}
-            max={15}
-            step={0.1}
-            value={customBeatHz}
-            onChange={setCustomBeatHz}
-            hints={["0.5 Hz delta", "6 Hz theta", "12 Hz alpha"]}
-          />
-          <Control
-            label="Carrier pitch"
-            readout={`${Math.round(carrierHz)} Hz`}
-            min={100}
-            max={432}
-            step={1}
-            value={carrierHz}
-            onChange={setCarrierHz}
-            hints={["100 Hz", "216 Hz", "432 Hz"]}
-          />
-        </section>
-
-        {/* Mixer */}
-        <section className="py-6 border-b border-[#2A2620] space-y-6">
-          <h2 className="text-sm text-[#8A8175] italic" style={{ fontFamily: SERIF }}>
-            Mixer
-          </h2>
-          <Control
-            label="Pure binaural tones"
-            readout={`${Math.round(binauralVolume * 100)}%`}
-            min={0}
-            max={1}
-            step={0.01}
-            value={binauralVolume}
-            onChange={setBinauralVolume}
-          />
-          <Control
-            label="Harmonic drone"
-            readout={`${Math.round(droneVolume * 100)}%`}
-            min={0}
-            max={1}
-            step={0.01}
-            value={droneVolume}
-            onChange={setDroneVolume}
-          />
-          <Control
-            label="Soft rain"
-            readout={`${Math.round(rainVolume * 100)}%`}
-            min={0}
-            max={1}
-            step={0.01}
-            value={rainVolume}
-            onChange={setRainVolume}
-          />
-          <Control
-            label="Air / static"
-            readout={`${Math.round(pinkNoiseVolume * 100)}%`}
-            min={0}
-            max={1}
-            step={0.01}
-            value={pinkNoiseVolume}
-            onChange={setPinkNoiseVolume}
-          />
-        </section>
-
-        {/* Master, timer, play */}
-        <section className="pt-6 space-y-6">
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-4 text-xs text-[#8A8175]">
-            <div className="flex w-full items-center gap-3 sm:w-auto">
-              <button
-                onClick={() => setMasterVolume((prev) => (prev > 0 ? 0 : 0.8))}
-                className="hover:text-[#E9E2D4] transition-colors"
-                aria-label="Mute or unmute"
-              >
-                {masterVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-              </button>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={masterVolume}
-                onChange={(e) => setMasterVolume(parseFloat(e.target.value))}
-                className="w-40 h-1 cursor-pointer accent-[#E9E2D4]"
-              />
-            </div>
-
-            <div className="flex items-center gap-3">
-              <span>Timer</span>
-              {[null, 15, 30, 60].map((mins) => (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base">
+            <span className="mr-1">Stop after</span>
+            {[null, 15, 30, 60].map((mins) => {
+              const active = timerMinutes === mins;
+              return (
                 <button
                   key={mins === null ? "off" : mins}
                   onClick={() => setTimerMinutes(mins)}
-                  className={`font-mono py-2 px-1 transition-colors ${
-                    timerMinutes === mins
-                      ? "text-[#D9A441] underline underline-offset-4"
-                      : "hover:text-[#E9E2D4]"
-                  }`}
+                  aria-pressed={active}
+                  className="min-h-11 px-3 tabular-nums"
+                  style={{
+                    color: active ? MIDNIGHT : "#A0A2B8",
+                    background: active ? "#D8D4C4" : "transparent",
+                    borderRadius: 2
+                  }}
                 >
-                  {mins === null ? "off" : `${mins}m`}
+                  {mins === null ? "Never" : `${mins} min`}
                 </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex justify-center">
-            <button
-              onClick={() => setDimScreen(true)}
-              className="text-xs text-[#8A8175] hover:text-[#E9E2D4] transition-colors py-2"
-            >
-              Dim screen
-            </button>
+              );
+            })}
+            {timeRemaining !== null && (
+              <span className="w-full text-[#A0A2B8] tabular-nums">Stops in {formatTimer(timeRemaining)}</span>
+            )}
           </div>
 
           <button
             onClick={togglePlay}
-            className="w-full py-3 border border-[#D9A441] text-[#D9A441] text-sm tracking-wide hover:bg-[#D9A441] hover:text-[#0E0D0B] transition-colors"
-            style={{ fontFamily: SERIF }}
+            className="w-full py-4 text-2xl transition-opacity hover:opacity-90"
+            style={{ background: "#D8D4C4", color: MIDNIGHT, fontFamily: DISPLAY, borderRadius: 2 }}
           >
-            {isPlaying ? (
-              <span className="inline-flex items-center gap-2">
-                <Pause className="w-4 h-4 fill-current" /> Pause
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-2">
-                <Play className="w-4 h-4 fill-current" /> Begin
-              </span>
-            )}
+            <span className="inline-flex items-center gap-3">
+              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+              {isPlaying ? "Pause" : "Begin"}
+            </span>
+          </button>
+
+          <details>
+            <summary className="cursor-pointer min-h-11 flex items-center text-base text-[#A0A2B8] hover:text-[#D8D4C4]">
+              Fine-tune
+            </summary>
+            <div className="mt-4 space-y-6">
+              <Control
+                label="Beat"
+                readout={`${customBeatHz.toFixed(1)} Hz`}
+                min={0.5}
+                max={15}
+                step={0.1}
+                value={customBeatHz}
+                onChange={setCustomBeatHz}
+                hints={["0.5 delta", "6 theta", "12 alpha"]}
+              />
+              <Control
+                label="Carrier pitch"
+                readout={`${Math.round(carrierHz)} Hz`}
+                min={100}
+                max={432}
+                step={1}
+                value={carrierHz}
+                onChange={setCarrierHz}
+                hints={["100", "216", "432"]}
+              />
+              <Control
+                label="Pure tone"
+                readout={`${Math.round(binauralVolume * 100)}%`}
+                min={0}
+                max={1}
+                step={0.01}
+                value={binauralVolume}
+                onChange={setBinauralVolume}
+              />
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-base">Master volume</span>
+                  <button
+                    onClick={() => setMasterVolume((prev) => (prev > 0 ? 0 : 0.8))}
+                    className="min-w-11 min-h-11 flex items-center justify-center text-[#A0A2B8] hover:text-[#D8D4C4]"
+                    aria-label={masterVolume === 0 ? "Unmute" : "Mute"}
+                  >
+                    {masterVolume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Master volume"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={masterVolume}
+                  onChange={(e) => setMasterVolume(parseFloat(e.target.value))}
+                  className="w-full h-1 cursor-pointer accent-[#D8D4C4]"
+                />
+              </div>
+            </div>
+          </details>
+
+          <button
+            onClick={() => setDimScreen(true)}
+            className="min-h-11 text-base text-[#A0A2B8] hover:text-[#D8D4C4] underline underline-offset-4"
+          >
+            Dim screen
           </button>
         </section>
       </main>

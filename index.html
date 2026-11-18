@@ -3,17 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0E0D0B" />
+    <meta name="theme-color" content="#14172B" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="apple-touch-icon" href="./icons/icon-192.png" />
     <meta name="description" content="Binaural beats and ambient soundscapes for sleep, in your browser." />
     <title>Sleep Soundscape</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500&family=Gloock&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      html, body { background: #0E0D0B; margin: 0; }
+      html, body { background: #14172B; margin: 0; }
+
+      .core { height: clamp(300px, 44vh, 460px); background: #14172B; box-shadow: inset 0 0 0 1px #262A4A; }
+      @media (min-width: 1024px) { .core { height: clamp(380px, 68vh, 640px); } }
+      .tex { position: absolute; inset: 0; pointer-events: none; }
+      .tex-rain {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='160'%3E%3Cg stroke='%23D8D4C4' stroke-width='1' stroke-linecap='round' opacity='.35'%3E%3Cpath d='M10 12l-2 22M38 70l-2 18M66 30l-2 26M94 104l-2 20M22 118l-2 24M108 20l-2 16M52 132l-2 18M80 62l-2 14'/%3E%3C/g%3E%3C/svg%3E");
+        background-size: 120px 160px;
+      }
+      .tex-air {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .85 0 0 0 0 .83 0 0 0 0 .77 1.4 0 0 0 -.45'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      }
+      .tex-drone {
+        background-image:
+          repeating-linear-gradient(0deg, rgba(20,23,43,.22) 0 1px, transparent 1px 7px),
+          repeating-linear-gradient(0deg, rgba(20,23,43,.12) 0 2px, transparent 2px 19px);
+      }
+      @keyframes rain-fall { to { background-position-y: 160px; } }
+      .is-playing .tex-rain { animation: rain-fall 7s linear infinite; }
+      @media (prefers-reduced-motion: reduce) { .is-playing .tex-rain { animation: none; } }
+      .seam { position: absolute; left: 0; right: 0; top: -16px; height: 32px; z-index: 2; cursor: ns-resize; touch-action: none; display: flex; align-items: center; }
+      .seam::before { content: ""; position: absolute; left: 0; right: 0; top: 15px; height: 2px; background: #D8D4C4; }
+      .seam-grip { position: relative; margin-left: 16px; width: 36px; height: 6px; border-radius: 3px; background: #D8D4C4; box-shadow: 0 0 0 3px #14172B; }
+      .seam:focus-visible { outline: none; }
+      .seam:focus-visible .seam-grip { box-shadow: 0 0 0 3px #14172B, 0 0 0 5px #8E9A63; }
+      :focus-visible { outline: 2px solid #8E9A63; outline-offset: 2px; }
+      summary { list-style: none; } summary::-webkit-details-marker { display: none; }
+      summary::after { content: "+"; margin-left: .6rem; } details[open] summary::after { content: "−"; }
       /* Larger slider thumbs on touch screens (Android) so they are easy to drag */
       @media (pointer: coarse) {
         input[type="range"] { height: 28px; }
